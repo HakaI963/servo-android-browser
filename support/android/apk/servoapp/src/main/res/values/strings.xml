@@ -4,7 +4,7 @@
   <string name="history_back">Back</string>
   <string name="history_forward">Forward</string>
   <string name="options">Options</string>
-  <string name="url_or_search">URL or Search</string>
+  <string name="url_or_search">Search or enter address</string>
   <string name="refresh">Refresh</string>
   <string name="cancel">Cancel</string>
   
@@ -16,6 +16,6 @@
   <!-- History -->
   <string name="history_title">History</string>
   <string name="history_placeholder_title">History</string>
-  <string name="history_placeholder_message">Your browsing history is empty</string>
-  <string name="clear_history">Clear History</string>
+  <string name="history_placeholder_message">No history yet</string>
+  <string name="clear_history">Clear history</string>
 </resources>
