@@ -34,6 +34,9 @@ import androidx.compose.material3.SearchBar
 import androidx.compose.material3.SearchBarDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.ui.graphics.Color
 import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
 import androidx.compose.material3.rememberSearchBarState
 import androidx.compose.runtime.Composable
@@ -58,6 +61,24 @@ import androidx.window.core.layout.WindowSizeClass
 import kotlinx.coroutines.launch
 import org.servo.servoview.Servo
 import org.servo.servoview.ServoNavigator
+
+/**
+ * Quiet graphite chrome with a single jade accent. The rendered web page carries the color.
+ * Palette follows the Servo Browser design direction (ui-ux-pro-max / unslop).
+ */
+private val BrowserColorScheme = darkColorScheme(
+    primary = Color(0xFF5FC79A),
+    onPrimary = Color(0xFF06120C),
+    secondary = Color(0xFF98A4AF),
+    onSecondary = Color(0xFF0B0E11),
+    background = Color(0xFF0B0E11),
+    onBackground = Color(0xFFE6EDF3),
+    surface = Color(0xFF141A1F),
+    onSurface = Color(0xFFE6EDF3),
+    surfaceVariant = Color(0xFF1C242B),
+    onSurfaceVariant = Color(0xFF98A4AF),
+    outline = Color(0xFF232C33),
+)
 
 class MainActivity : ComponentActivity(), Servo.Client {
     private val urlTextFieldState = TextFieldState()
@@ -94,6 +115,7 @@ class MainActivity : ComponentActivity(), Servo.Client {
             }
 
         setContent {
+            MaterialTheme(colorScheme = BrowserColorScheme) {
             LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
                 val settings = Settings(sharedPreferences)
                 experimentalModeEnabled = settings.experimental
@@ -251,6 +273,7 @@ class MainActivity : ComponentActivity(), Servo.Client {
                         text = { Text(alertMessage) },
                     )
                 }
+            }
             }
         }
 
