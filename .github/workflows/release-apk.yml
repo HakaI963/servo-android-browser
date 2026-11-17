@@ -1,0 +1,42 @@
+name: Release APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: 'Run ID of the Android build that produced the APK'
+        required: true
+        type: string
+      tag:
+        description: 'Release tag'
+        required: true
+        default: 'v0.1.0'
+        type: string
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download APK from the upstream build run
+        uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.source_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          name: checked-release-binary-android-aarch64-linux-android
+          path: dist
+
+      - name: Normalize artifact name
+        run: find dist -name '*.apk' -exec mv {} dist/servoapp.apk \;
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag }}
+          name: Servo Browser for Android ${{ inputs.tag }}
+          files: dist/servoapp.apk
+          generate_release_notes: true
+          fail_on_unmatched_files: true
