@@ -10,11 +10,13 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
+import androidx.compose.material3.Button
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -28,13 +30,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.core.content.edit
-import androidx.preference.PreferenceManager
+import org.servo.servoview.ContainerRegistry
+import kotlin.system.exitProcess
 
 class SettingsActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        val preferences = PreferenceManager.getDefaultSharedPreferences(this)
+        val preferences =
+            getSharedPreferences("servo_container_${ContainerManager(this).activeId}", MODE_PRIVATE)
         setContent {
             Scaffold(
                 topBar = {
@@ -59,6 +63,15 @@ class SettingsActivity : ComponentActivity() {
                         preferences = preferences,
                         preferenceKey = "experimental",
                     )
+                    Button(
+                        onClick = {
+                            ContainerRegistry.killAll()
+                            exitProcess(0)
+                        },
+                        modifier = Modifier.padding(16.dp).fillMaxWidth(),
+                    ) {
+                        Text(stringResource(R.string.terminate_sessions))
+                    }
                 }
             }
         }
