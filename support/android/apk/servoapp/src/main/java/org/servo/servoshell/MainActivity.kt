@@ -3,6 +3,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
+@file:OptIn(ExperimentalMaterial3Api::class)
+
 package org.servo.servoshell
 
 import android.content.Intent
@@ -17,26 +19,34 @@ import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.component1
 import androidx.activity.result.component2
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.foundation.text.input.selectAll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SearchBar
 import androidx.compose.material3.SearchBarDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.ui.graphics.Color
+import androidx.compose.material3.TextField
 import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
 import androidx.compose.material3.rememberSearchBarState
 import androidx.compose.runtime.Composable
@@ -56,51 +66,70 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
-import androidx.preference.PreferenceManager
 import androidx.window.core.layout.WindowSizeClass
 import kotlinx.coroutines.launch
+import org.servo.servoview.ContainerRegistry
 import org.servo.servoview.Servo
 import org.servo.servoview.ServoNavigator
-
-/**
- * Quiet graphite chrome with a single jade accent. The rendered web page carries the color.
- * Palette follows the Servo Browser design direction (ui-ux-pro-max / unslop).
- */
-private val BrowserColorScheme = darkColorScheme(
-    primary = Color(0xFF5FC79A),
-    onPrimary = Color(0xFF06120C),
-    secondary = Color(0xFF98A4AF),
-    onSecondary = Color(0xFF0B0E11),
-    background = Color(0xFF0B0E11),
-    onBackground = Color(0xFFE6EDF3),
-    surface = Color(0xFF141A1F),
-    onSurface = Color(0xFFE6EDF3),
-    surfaceVariant = Color(0xFF1C242B),
-    onSurfaceVariant = Color(0xFF98A4AF),
-    outline = Color(0xFF232C33),
-)
 
 class MainActivity : ComponentActivity(), Servo.Client {
     private val urlTextFieldState = TextFieldState()
     private var isRefreshing by mutableStateOf(false)
-    private lateinit var historyManager: HistoryManager
-    private var currentUrl = ""
-    private var currentTitle = ""
     private var alertMessage by mutableStateOf<String?>(null)
+
+    private lateinit var containerManager: ContainerManager
+    private var activeContainer by mutableStateOf("")
+    private var showContainers by mutableStateOf(false)
+    private var showCreateContainer by mutableStateOf(false)
+    private var newContainerName by mutableStateOf("")
+
+    private val navigators = mutableMapOf<String, ServoNavigator>()
+    private val historyManagers = mutableMapOf<String, HistoryManager>()
+    private val currentUrls = mutableMapOf<String, String>()
+    private val currentTitles = mutableMapOf<String, String>()
 
     private class Settings(preferences: SharedPreferences) {
         var experimental = preferences.getBoolean("experimental", false)
     }
 
+    private fun preferencesFor(id: String): SharedPreferences =
+        getSharedPreferences("servo_container_$id", MODE_PRIVATE)
+
+    private fun navigatorFor(id: String): ServoNavigator = navigators.getOrPut(id) { ServoNavigator() }
+    private fun historyFor(id: String): HistoryManager = historyManagers.getOrPut(id) { HistoryManager(this, id) }
+
+    private fun switchContainer(id: String) {
+        activeContainer = id
+        containerManager.activeId = id
+        showContainers = false
+    }
+
+    private fun deleteContainer(id: String) {
+        ContainerRegistry.kill(id)
+        navigators.remove(id)
+        historyManagers.remove(id)
+        currentUrls.remove(id)
+        currentTitles.remove(id)
+        containerManager.remove(id)
+        if (activeContainer == id) switchContainer(containerManager.activeId)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        val sharedPreferences = PreferenceManager.getDefaultSharedPreferences(applicationContext)
-        val settings = Settings(sharedPreferences)
-        val navigator = ServoNavigator()
-        var experimentalModeEnabled by mutableStateOf(settings.experimental)
+        containerManager = ContainerManager(this)
+        if (containerManager.containers.isEmpty()) {
+            containerManager.create("Personal")
+        }
+        val restored = containerManager.activeId
+        activeContainer = if (restored.isNotEmpty() && containerManager.containers.any { it.id == restored }) {
+            restored
+        } else {
+            containerManager.containers.first().id
+        }
+        containerManager.activeId = activeContainer
 
-        historyManager = HistoryManager(this)
+        var experimentalModeEnabled by mutableStateOf(Settings(preferencesFor(activeContainer)).experimental)
 
         val historyActivityResultLauncher =
             registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
@@ -109,16 +138,17 @@ class MainActivity : ComponentActivity(), Servo.Client {
                     val url = data.getStringExtra("url")
                     if (!url.isNullOrEmpty()) {
                         urlTextFieldState.edit { replace(0, length, url) }
-                        navigator.navigate(urlTextFieldState.text.toString())
+                        navigatorFor(activeContainer).navigate(urlTextFieldState.text.toString())
                     }
                 }
             }
 
         setContent {
-            MaterialTheme(colorScheme = BrowserColorScheme) {
             LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
-                val settings = Settings(sharedPreferences)
-                experimentalModeEnabled = settings.experimental
+                experimentalModeEnabled = Settings(preferencesFor(activeContainer)).experimental
+            }
+            LaunchedEffect(activeContainer) {
+                urlTextFieldState.edit { replace(0, length, currentUrls[activeContainer].orEmpty()) }
             }
 
             val isWindowWidthAtLeastMedium =
@@ -127,12 +157,20 @@ class MainActivity : ComponentActivity(), Servo.Client {
                     .isWidthAtLeastBreakpoint(WindowSizeClass.WIDTH_DP_MEDIUM_LOWER_BOUND)
 
             val servoFocusRequester = remember { FocusRequester() }
+            val navigator = remember(activeContainer) { navigatorFor(activeContainer) }
+
             Scaffold(
                 topBar = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(onClick = { showContainers = true }) {
+                            Icon(
+                                painterResource(R.drawable.containers),
+                                stringResource(R.string.containers),
+                            )
+                        }
                         if (isWindowWidthAtLeastMedium) {
                             IconButton(
-                                onClick = { onHistoryBackMenuItemClicked(navigator) },
+                                onClick = { navigator.back() },
                                 enabled = navigator.canGoBack,
                             ) {
                                 Icon(
@@ -141,7 +179,7 @@ class MainActivity : ComponentActivity(), Servo.Client {
                                 )
                             }
                             IconButton(
-                                onClick = { onHistoryForwardMenuItemClicked(navigator) },
+                                onClick = { navigator.forward() },
                                 enabled = navigator.canGoForward,
                             ) {
                                 Icon(
@@ -151,8 +189,7 @@ class MainActivity : ComponentActivity(), Servo.Client {
                             }
                             IconButton(
                                 onClick = {
-                                    if (isRefreshing) onCancelMenuItemClicked(navigator)
-                                    else onRefreshMenuItemClicked(navigator)
+                                    if (isRefreshing) navigator.stop() else navigator.reload()
                                 },
                             ) {
                                 if (isRefreshing) {
@@ -188,11 +225,7 @@ class MainActivity : ComponentActivity(), Servo.Client {
                                     stringResource(R.string.options),
                                 )
                             }
-                            IconButton(
-                                onClick = {
-                                    onHistoryMenuItemClicked(historyActivityResultLauncher)
-                                },
-                            ) {
+                            IconButton(onClick = { onHistoryMenuItemClicked(historyActivityResultLauncher) }) {
                                 Icon(
                                     painterResource(R.drawable.history),
                                     stringResource(R.string.history_title),
@@ -207,28 +240,28 @@ class MainActivity : ComponentActivity(), Servo.Client {
                             NavigationBarItem(
                                 selected = false,
                                 enabled = navigator.canGoBack,
-                                onClick = { onHistoryBackMenuItemClicked(navigator) },
+                                onClick = { navigator.back() },
                                 icon = { Icon(painterResource(R.drawable.arrow_back), null) },
                                 label = { Text(stringResource(R.string.history_back)) },
                             )
                             NavigationBarItem(
                                 selected = false,
                                 enabled = navigator.canGoForward,
-                                onClick = { onHistoryForwardMenuItemClicked(navigator) },
+                                onClick = { navigator.forward() },
                                 icon = { Icon(painterResource(R.drawable.arrow_forward), null) },
                                 label = { Text(stringResource(R.string.history_forward)) },
                             )
                             if (isRefreshing) {
                                 NavigationBarItem(
                                     selected = false,
-                                    onClick = { onCancelMenuItemClicked(navigator) },
+                                    onClick = { navigator.stop() },
                                     icon = { Icon(painterResource(R.drawable.cancel), null) },
                                     label = { Text(stringResource(R.string.cancel)) },
                                 )
                             } else {
                                 NavigationBarItem(
                                     selected = false,
-                                    onClick = { onRefreshMenuItemClicked(navigator) },
+                                    onClick = { navigator.reload() },
                                     icon = { Icon(painterResource(R.drawable.refresh), null) },
                                     label = { Text(stringResource(R.string.refresh)) },
                                 )
@@ -241,9 +274,7 @@ class MainActivity : ComponentActivity(), Servo.Client {
                             )
                             NavigationBarItem(
                                 selected = false,
-                                onClick = {
-                                    onHistoryMenuItemClicked(historyActivityResultLauncher)
-                                },
+                                onClick = { onHistoryMenuItemClicked(historyActivityResultLauncher) },
                                 icon = { Icon(painterResource(R.drawable.history), null) },
                                 label = { Text(stringResource(R.string.history_title)) },
                             )
@@ -252,28 +283,104 @@ class MainActivity : ComponentActivity(), Servo.Client {
                 },
             ) { innerPadding ->
                 Servo(
+                    containerId = activeContainer,
                     experimentalModeEnabled = experimentalModeEnabled,
                     args = intent.getStringExtra("servoargs"),
-                    initialUrl =
-                        if (Intent.ACTION_VIEW == intent.action) intent.data.toString() else null,
+                    initialUrl = if (Intent.ACTION_VIEW == intent.action) intent.data.toString() else null,
                     logStr = intent.getStringExtra("servolog"),
                     client = this,
                     navigator = navigator,
                     modifier = Modifier.padding(innerPadding).focusRequester(servoFocusRequester),
                 )
                 LaunchedEffect(servoFocusRequester) { servoFocusRequester.requestFocus() }
-                alertMessage?.let { alertMessage ->
+                alertMessage?.let { message ->
                     AlertDialog(
-                        onDismissRequest = { this.alertMessage = null },
+                        onDismissRequest = { alertMessage = null },
                         confirmButton = {
-                            TextButton(onClick = { this.alertMessage = null }) {
+                            TextButton(onClick = { alertMessage = null }) {
                                 Text(stringResource(android.R.string.ok))
                             }
                         },
-                        text = { Text(alertMessage) },
+                        text = { Text(message) },
                     )
                 }
             }
+
+            if (showContainers) {
+                ModalBottomSheet(onDismissRequest = { showContainers = false }) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            stringResource(R.string.containers),
+                            style = androidx.compose.material3.MaterialTheme.typography.titleLarge,
+                        )
+                        Text(
+                            stringResource(R.string.container_note),
+                            style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        LazyColumn(modifier = Modifier.fillMaxWidth().height(320.dp)) {
+                            items(containerManager.containers, key = { it.id }) { container ->
+                                ListItem(
+                                    headlineContent = { Text(container.name) },
+                                    leadingContent = {
+                                        RadioButton(
+                                            selected = container.id == activeContainer,
+                                            onClick = { switchContainer(container.id) },
+                                        )
+                                    },
+                                    trailingContent = {
+                                        if (containerManager.containers.size > 1) {
+                                            IconButton(onClick = { deleteContainer(container.id) }) {
+                                                Icon(
+                                                    painterResource(R.drawable.delete),
+                                                    stringResource(R.string.cancel),
+                                                )
+                                            }
+                                        }
+                                    },
+                                )
+                            }
+                        }
+                        Button(
+                            onClick = {
+                                showContainers = false
+                                showCreateContainer = true
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(stringResource(R.string.new_container))
+                        }
+                    }
+                }
+            }
+
+            if (showCreateContainer) {
+                AlertDialog(
+                    onDismissRequest = { showCreateContainer = false },
+                    title = { Text(stringResource(R.string.new_container)) },
+                    text = {
+                        TextField(
+                            value = newContainerName,
+                            onValueChange = { newContainerName = it },
+                            singleLine = true,
+                            label = { Text(stringResource(R.string.container_name)) },
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            if (newContainerName.isNotBlank()) {
+                                switchContainer(containerManager.create(newContainerName.trim()).id)
+                                newContainerName = ""
+                            }
+                            showCreateContainer = false
+                        }) { Text(stringResource(R.string.create)) }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showCreateContainer = false }) {
+                            Text(stringResource(R.string.cancel))
+                        }
+                    },
+                )
             }
         }
 
@@ -286,30 +393,12 @@ class MainActivity : ComponentActivity(), Servo.Client {
         }
     }
 
-    private fun onHistoryBackMenuItemClicked(navigator: ServoNavigator) {
-        navigator.back()
-    }
-
-    private fun onHistoryForwardMenuItemClicked(navigator: ServoNavigator) {
-        navigator.forward()
-    }
-
-    private fun onRefreshMenuItemClicked(navigator: ServoNavigator) {
-        navigator.reload()
-    }
-
-    private fun onCancelMenuItemClicked(navigator: ServoNavigator) {
-        navigator.stop()
-    }
-
     private fun onSettingsMenuItemClicked() {
         startActivity(Intent(this, SettingsActivity::class.java))
     }
 
-    private fun onHistoryMenuItemClicked(
-        historyActivityResultLauncher: ActivityResultLauncher<Intent>,
-    ) {
-        historyActivityResultLauncher.launch(Intent(this, HistoryActivity::class.java))
+    private fun onHistoryMenuItemClicked(launcher: ActivityResultLauncher<Intent>) {
+        launcher.launch(Intent(this, HistoryActivity::class.java))
     }
 
     override fun onAlert(message: String) {
@@ -317,31 +406,26 @@ class MainActivity : ComponentActivity(), Servo.Client {
     }
 
     override fun onLoadStarted() {
-        // This doesn’t seem to actually happen when navigating
-        // back to a page that is already cached.
         Log.i(TAG, "onLoadStarted: ")
         isRefreshing = true
     }
 
-    // INFO: This currently gets called multiple times on each load.
     override fun onLoadEnded() {
         Log.i(TAG, "onLoadEnded: ")
-        if (currentUrl.isNotEmpty()) {
-            // HistoryManager has a basic method of preventing clobbering
-            // by the fact that onLoadEnded gets called multiple times
-            // per page.
-            historyManager.addEntry(currentUrl, currentTitle)
+        val url = currentUrls[activeContainer].orEmpty()
+        if (url.isNotEmpty()) {
+            historyFor(activeContainer).addEntry(url, currentTitles[activeContainer])
         }
         isRefreshing = false
     }
 
     override fun onTitleChanged(title: String) {
-        currentTitle = title
+        currentTitles[activeContainer] = title
     }
 
     override fun onUrlChanged(url: String) {
         urlTextFieldState.edit { replace(0, length, url) }
-        currentUrl = url
+        currentUrls[activeContainer] = url
     }
 
     companion object {
@@ -367,12 +451,11 @@ private fun Omnibox(
                 textFieldState = textFieldState,
                 searchBarState = searchBarState,
                 onSearch = onSearch,
-                modifier =
-                    Modifier.onFocusChanged { focusState ->
-                        if (focusState.isFocused) {
-                            coroutineScope.launch { textFieldState.edit { selectAll() } }
-                        }
-                    },
+                modifier = Modifier.onFocusChanged { focusState ->
+                    if (focusState.isFocused) {
+                        coroutineScope.launch { textFieldState.edit { selectAll() } }
+                    }
+                },
                 placeholder = { Text(stringResource(R.string.url_or_search)) },
             )
         },
