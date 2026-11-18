@@ -27,6 +27,15 @@ object ContainerRegistry {
     private val slots = ConcurrentHashMap<String, Int>()
     private val nextSlot = AtomicInteger(0)
     private val freeSlots = ConcurrentLinkedQueue<Int>()
+    private var activeContainer: String? = null
+
+    /** Only one container renders at a time; pause the previous one so two engines never
+     * paint into the same ANativeWindow. */
+    fun setActive(containerId: String) {
+        if (activeContainer == containerId) return
+        activeContainer?.let { engines[it]?.pausePainting() }
+        activeContainer = containerId
+    }
 
     /** Each container owns one thread-bound slot in the native engine. */
     fun slotFor(containerId: String): Int =
@@ -46,6 +55,7 @@ object ContainerRegistry {
         onImeShow: () -> Unit,
         onImeHide: () -> Unit,
     ): Servo {
+        setActive(containerId)
         engines[containerId]?.let { existing ->
             existing.update(client, navigator, onImeShow, onImeHide)
             return existing
@@ -78,6 +88,7 @@ object ContainerRegistry {
     fun kill(containerId: String) {
         engines.remove(containerId)?.kill()
         slots.remove(containerId)?.let { freeSlots.add(it) }
+        if (activeContainer == containerId) activeContainer = null
     }
 
     fun killAll() {
@@ -85,5 +96,6 @@ object ContainerRegistry {
         engines.clear()
         freeSlots.addAll(slots.values)
         slots.clear()
+        activeContainer = null
     }
 }
