@@ -22,6 +22,8 @@ internal class JNIServo {
         logStr: String?,
         experimentalMode: Boolean,
         callbacks: Callbacks,
+        containerId: String,
+        slot: Int,
     )
 
     external fun addPlatformWindow(
