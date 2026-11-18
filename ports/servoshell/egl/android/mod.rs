@@ -4,7 +4,7 @@
 
 #![allow(non_snake_case)]
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::os::raw::{c_char, c_int, c_void};
 use std::path::PathBuf;
 use std::ptr::NonNull;
@@ -35,12 +35,17 @@ use crate::window::ServoShellWindowId;
 
 thread_local! {
     pub static APP: RefCell<Option<Rc<App>>> = const { RefCell::new(None) };
+    static CONTAINER_SLOT: Cell<usize> = const { Cell::new(0) };
 }
 
-static CALLBACK_OBJECT: OnceLock<Global<JObject<'static>>> = OnceLock::new();
+/// One callback slot per browser container. Each container owns a GL thread that is bound to a
+/// slot in `init`, allowing many isolated Servo instances inside a single Android process.
+static CALLBACK_OBJECTS: [OnceLock<Global<JObject<'static>>>;
+    crate::prefs::MAX_CONTAINERS] = [const { OnceLock::new() }; crate::prefs::MAX_CONTAINERS];
 
 fn callback_ref() -> &'static JObject<'static> {
-    CALLBACK_OBJECT.get().expect("Servo init failed").as_ref()
+    let slot = CONTAINER_SLOT.with(|slot| slot.get());
+    CALLBACK_OBJECTS[slot].get().expect("Servo init failed").as_ref()
 }
 
 struct HostCallbacks {
@@ -82,11 +87,19 @@ pub extern "C" fn Java_org_servo_servoview_JNIServo_init<'local>(
     logStr: JString<'local>,
     experimental_mode: jboolean,
     callbacks_obj: JObject<'local>,
+    container_id: JString<'local>,
+    slot: jint,
 ) {
     env.with_env(|env| -> jni::errors::Result<_> {
         let args = JString::cast_local(env, args)?.try_to_string(env).ok();
         let url = JString::cast_local(env, url)?.try_to_string(env).ok();
         let log_str = JString::cast_local(env, logStr)?.try_to_string(env).ok();
+        let container_id = JString::cast_local(env, container_id)?
+            .try_to_string(env)?
+            .unwrap_or_else(|| "default".to_owned());
+        let slot = (slot as usize).min(crate::prefs::MAX_CONTAINERS - 1);
+        CONTAINER_SLOT.with(|s| s.set(slot));
+        crate::prefs::set_container_slot(slot);
 
         let mut args: Vec<String> = args
             .and_then(|args| {
@@ -157,9 +170,7 @@ pub extern "C" fn Java_org_servo_servoview_JNIServo_init<'local>(
 
         let callbacks: Global<JObject<'static>> = env.new_global_ref(callbacks_obj)?;
 
-        CALLBACK_OBJECT
-            .set(callbacks)
-            .expect("CALLBACK_OBJECT was already initialized.");
+        let _ = CALLBACK_OBJECTS[slot].set(callbacks);
 
         let jvm = env.get_java_vm()?;
         let event_loop_waker = Box::new(WakeupCallback::new(jvm.clone()));
@@ -168,7 +179,7 @@ pub extern "C" fn Java_org_servo_servoview_JNIServo_init<'local>(
 
         crate::init_crypto();
 
-        if let Err(error) = set_default_config_dir(env, &context) {
+        if let Err(error) = set_default_config_dir(env, &context, slot, &container_id) {
             error!("Failed to determine Android config directory: {error:?}");
         }
 
@@ -750,6 +761,8 @@ fn jni_coordinate_to_rust_viewport_rect<'local>(
 fn set_default_config_dir<'local>(
     env: &mut Env<'local>,
     context: &JObject<'local>,
+    slot: usize,
+    container_id: &str,
 ) -> Result<(), Error> {
     let files_dir = env
         .call_method(
@@ -769,14 +782,12 @@ fn set_default_config_dir<'local>(
         .l()?;
     let path = JString::cast_local(env, path)?.try_to_string(env)?;
 
-    let config_dir = PathBuf::from(path).join("servo");
+    let config_dir = PathBuf::from(path).join("servo").join(container_id);
     if let Err(error) = std::fs::create_dir_all(&config_dir) {
         error!("Failed to create config directory at {config_dir:?}: {error:?}");
     }
-    debug!("Default config dir: {config_dir:?}");
-    let _ = crate::prefs::DEFAULT_CONFIG_DIR
-        .set(config_dir)
-        .inspect_err(|path| warn!("Default config dir was already set to {path:?}"));
+    debug!("Container {container_id} config dir: {config_dir:?}");
+    crate::prefs::set_container_config_dir(slot, config_dir);
     Ok(())
 }
 
