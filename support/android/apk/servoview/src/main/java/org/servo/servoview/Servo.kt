@@ -22,7 +22,6 @@ import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
@@ -46,12 +45,14 @@ import kotlin.coroutines.EmptyCoroutineContext
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
 
 @Composable
 fun Servo(
+    containerId: String,
     experimentalModeEnabled: Boolean,
     args: String?,
     initialUrl: String?,
@@ -61,15 +62,14 @@ fun Servo(
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     var softKeyboardVisible by remember { mutableStateOf(false) }
-    val servo = remember {
-        Servo(
+    val servo = remember(containerId) {
+        ContainerRegistry.getOrCreate(
+            containerId = containerId,
             args = args,
             url = initialUrl,
             logStr = logStr,
             experimentalMode = experimentalModeEnabled,
-            scope = scope,
             client = client,
             context = context,
             navigator = navigator,
@@ -90,7 +90,18 @@ fun Servo(
     LaunchedEffect(servo, navigator) { navigator.consumeNavigationEvents(servo) }
     BackHandler(enabled = navigator.canGoBack) { navigator.back() }
     LaunchedEffect(experimentalModeEnabled) { servo.setExperimentalMode(experimentalModeEnabled) }
-    DisposableEffect(servo) { onDispose { servo.glDispatcher.close() } }
+    DisposableEffect(servo, client, navigator) {
+        servo.update(
+            client = client,
+            navigator = navigator,
+            onImeShow = { softKeyboardVisible = true },
+            onImeHide = { softKeyboardVisible = false },
+        )
+        onDispose {
+            // Keep the session alive across Activity recreation and backgrounding.
+            // The engine is destroyed only when the user explicitly kills sessions.
+        }
+    }
 
     val resources = LocalResources.current
     val focusRequester = remember { FocusRequester() }
@@ -256,6 +267,8 @@ internal constructor(
     url: String?,
     logStr: String?,
     experimentalMode: Boolean,
+    private val containerId: String,
+    private val slot: Int,
     private val scope: CoroutineScope,
     client: Client,
     context: Context,
@@ -285,6 +298,8 @@ internal constructor(
                 logStr,
                 experimentalMode,
                 servoCallbacks,
+                containerId,
+                slot,
             )
         }
     }
@@ -371,6 +386,25 @@ internal constructor(
         scope.launch(glDispatcher) { jni.doFrame() }
     }
 
+    /** Rebind the engine to the current Activity without re-initializing the page. */
+    fun update(
+        client: Client,
+        navigator: ServoNavigator,
+        onImeShow: () -> Unit,
+        onImeHide: () -> Unit,
+    ) {
+        servoCallbacks.client = client
+        servoCallbacks.navigator = navigator
+        servoCallbacks.onImeShow = onImeShow
+        servoCallbacks.onImeHide = onImeHide
+    }
+
+    /** Destroy this session. Only call this when the user explicitly kills sessions. */
+    fun kill() {
+        scope.cancel()
+        glDispatcher.close()
+    }
+
     interface Client {
         fun onAlert(message: String)
 
@@ -388,9 +422,9 @@ internal constructor(
         private val jni: JNIServo,
         private val scope: CoroutineScope,
         private val glDispatcher: CoroutineDispatcher,
-        private val navigator: ServoNavigator,
-        private val onImeShow: () -> Unit,
-        private val onImeHide: () -> Unit,
+        private var navigator: ServoNavigator,
+        private var onImeShow: () -> Unit,
+        private var onImeHide: () -> Unit,
     ) : JNIServo.Callbacks, Client {
         var suspended: Boolean = false
 
