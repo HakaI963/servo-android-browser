@@ -154,12 +154,35 @@ pub fn default_config_dir() -> Option<PathBuf> {
     Some(config_dir)
 }
 
-/// Overrides the default preference dir
+/// One slot per browser container. Each container runs on its own GL thread, so its site data,
+/// cookies and preferences are stored in a directory only that thread can resolve.
 #[cfg(any(target_os = "android", target_env = "ohos"))]
-pub(crate) static DEFAULT_CONFIG_DIR: OnceLock<PathBuf> = OnceLock::new();
+pub(crate) const MAX_CONTAINERS: usize = 64;
+
+#[cfg(any(target_os = "android", target_env = "ohos"))]
+pub(crate) static DEFAULT_CONFIG_DIRS: [OnceLock<PathBuf>; MAX_CONTAINERS] =
+    [const { OnceLock::new() }; MAX_CONTAINERS];
+
+#[cfg(any(target_os = "android", target_env = "ohos"))]
+thread_local! {
+    static CONTAINER_SLOT: Cell<usize> = const { Cell::new(0) };
+}
+
+/// Bind the calling thread to a container slot. Called from the JNI init of that container.
+#[cfg(any(target_os = "android", target_env = "ohos"))]
+pub fn set_container_slot(slot: usize) {
+    CONTAINER_SLOT.with(|s| s.set(slot.min(MAX_CONTAINERS - 1)));
+}
+
+#[cfg(any(target_os = "android", target_env = "ohos"))]
+pub fn set_container_config_dir(slot: usize, path: PathBuf) {
+    let _ = DEFAULT_CONFIG_DIRS[slot.min(MAX_CONTAINERS - 1)].set(path);
+}
+
 #[cfg(any(target_os = "android", target_env = "ohos"))]
 pub fn default_config_dir() -> Option<PathBuf> {
-    DEFAULT_CONFIG_DIR.get().cloned()
+    let slot = CONTAINER_SLOT.with(|s| s.get());
+    DEFAULT_CONFIG_DIRS[slot].get().cloned()
 }
 
 #[cfg(target_os = "macos")]
