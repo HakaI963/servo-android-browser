@@ -157,7 +157,7 @@ pub fn default_config_dir() -> Option<PathBuf> {
 /// One slot per browser container. Each container runs on its own GL thread, so its site data,
 /// cookies and preferences are stored in a directory only that thread can resolve.
 #[cfg(any(target_os = "android", target_env = "ohos"))]
-pub(crate) const MAX_CONTAINERS: usize = 64;
+pub(crate) const MAX_CONTAINERS: usize = 256;
 
 #[cfg(any(target_os = "android", target_env = "ohos"))]
 pub(crate) static DEFAULT_CONFIG_DIRS: [OnceLock<PathBuf>; MAX_CONTAINERS] =
