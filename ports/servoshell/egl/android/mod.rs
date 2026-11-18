@@ -94,7 +94,8 @@ pub extern "C" fn Java_org_servo_servoview_JNIServo_init<'local>(
         let url = JString::cast_local(env, url)?.try_to_string(env).ok();
         let log_str = JString::cast_local(env, logStr)?.try_to_string(env).ok();
         let container_id = JString::cast_local(env, container_id)?
-            .try_to_string(env)?
+            .try_to_string(env)
+            .ok()
             .unwrap_or_else(|| "default".to_owned());
         let slot = (slot as usize).min(crate::prefs::MAX_CONTAINERS - 1);
         crate::prefs::set_container_slot(slot);
