@@ -321,8 +321,7 @@ class MainActivity : ComponentActivity(), Servo.Client {
                     )
                 }
             }
-
-
+            }
         }
 
         val sdcard = getExternalFilesDir("")
