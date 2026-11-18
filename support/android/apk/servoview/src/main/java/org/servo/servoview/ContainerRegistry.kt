@@ -10,6 +10,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -25,10 +26,13 @@ object ContainerRegistry {
     private val engines = ConcurrentHashMap<String, Servo>()
     private val slots = ConcurrentHashMap<String, Int>()
     private val nextSlot = AtomicInteger(0)
+    private val freeSlots = ConcurrentLinkedQueue<Int>()
 
     /** Each container owns one thread-bound slot in the native engine. */
     fun slotFor(containerId: String): Int =
-        slots.computeIfAbsent(containerId) { nextSlot.getAndIncrement() % MAX_CONTAINERS }
+        slots.computeIfAbsent(containerId) {
+            freeSlots.poll() ?: (nextSlot.getAndIncrement() % MAX_CONTAINERS)
+        }
 
     fun getOrCreate(
         containerId: String,
@@ -73,12 +77,13 @@ object ContainerRegistry {
 
     fun kill(containerId: String) {
         engines.remove(containerId)?.kill()
-        slots.remove(containerId)
+        slots.remove(containerId)?.let { freeSlots.add(it) }
     }
 
     fun killAll() {
         engines.values.forEach { it.kill() }
         engines.clear()
+        freeSlots.addAll(slots.values)
         slots.clear()
     }
 }
