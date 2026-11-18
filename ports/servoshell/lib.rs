@@ -42,9 +42,9 @@ pub fn main() {
 }
 
 pub fn init_crypto() {
-    rustls::crypto::aws_lc_rs::default_provider()
-        .install_default()
-        .expect("Error initializing crypto provider");
+    // Several browser containers initialize Servo in the same process. Installing the crypto
+    // provider more than once is harmless, so ignore the "already installed" result.
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 }
 
 pub fn init_tracing(filter_directives: Option<&str>) {
@@ -94,8 +94,7 @@ pub fn init_tracing(filter_directives: Option<&str>) {
         // since it would break Servo’s FromScriptLogger and FromEmbederLogger.
         // <https://docs.rs/tracing-subscriber/0.3.18/tracing_subscriber/util/trait.SubscriberInitExt.html#method.init>
         // <https://docs.rs/tracing/0.1.40/tracing/#consuming-log-records>
-        tracing::subscriber::set_global_default(subscriber)
-            .expect("Failed to set tracing subscriber");
+        let _ = tracing::subscriber::set_global_default(subscriber);
 
         // Capture a first event, including the explicit wallclock time.
         // The event itself is useful when investigating startup time.
