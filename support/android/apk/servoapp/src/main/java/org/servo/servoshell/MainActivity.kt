@@ -8,6 +8,7 @@
 package org.servo.servoshell
 
 import android.content.Intent
+import android.net.Uri
 import android.content.SharedPreferences
 import android.os.Bundle
 import android.system.ErrnoException
@@ -79,9 +80,6 @@ class MainActivity : ComponentActivity(), Servo.Client {
 
     private lateinit var containerManager: ContainerManager
     private var activeContainer by mutableStateOf("")
-    private var showContainers by mutableStateOf(false)
-    private var showCreateContainer by mutableStateOf(false)
-    private var newContainerName by mutableStateOf("")
 
     private val navigators = mutableMapOf<String, ServoNavigator>()
     private val historyManagers = mutableMapOf<String, HistoryManager>()
@@ -101,7 +99,7 @@ class MainActivity : ComponentActivity(), Servo.Client {
     private fun switchContainer(id: String) {
         activeContainer = id
         containerManager.activeId = id
-        showContainers = false
+        ContainerRegistry.setActive(id)
     }
 
     private fun deleteContainer(id: String) {
@@ -121,7 +119,14 @@ class MainActivity : ComponentActivity(), Servo.Client {
         if (containerManager.containers.isEmpty()) {
             containerManager.create("Personal")
         }
-        val restored = containerManager.activeId
+        val requested = intent.getStringExtra(EXTRA_CONTAINER_ID)
+        val restored = if (!requested.isNullOrEmpty() &&
+            containerManager.containers.any { it.id == requested }
+        ) {
+            requested
+        } else {
+            containerManager.activeId
+        }
         activeContainer = if (restored.isNotEmpty() && containerManager.containers.any { it.id == restored }) {
             restored
         } else {
@@ -144,6 +149,7 @@ class MainActivity : ComponentActivity(), Servo.Client {
             }
 
         setContent {
+            ServoTheme {
             LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
                 experimentalModeEnabled = Settings(preferencesFor(activeContainer)).experimental
             }
@@ -162,7 +168,7 @@ class MainActivity : ComponentActivity(), Servo.Client {
             Scaffold(
                 topBar = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(onClick = { showContainers = true }) {
+                        IconButton(onClick = { finish() }) {
                             Icon(
                                 painterResource(R.drawable.containers),
                                 stringResource(R.string.containers),
@@ -208,7 +214,13 @@ class MainActivity : ComponentActivity(), Servo.Client {
                         Omnibox(
                             urlTextFieldState,
                             onSearch = { search ->
-                                navigator.navigate(search)
+                                val input = search.trim()
+                                val url = when {
+                                    input.startsWith("http", ignoreCase = true) -> input
+                                    input.contains('.') && !input.contains(' ') -> "https://$input"
+                                    else -> "https://www.google.com/search?q=" + Uri.encode(input)
+                                }
+                                navigator.navigate(url)
                                 servoFocusRequester.requestFocus()
                             },
                             modifier = Modifier.weight(1f).padding(end = 10.dp),
@@ -286,7 +298,11 @@ class MainActivity : ComponentActivity(), Servo.Client {
                     containerId = activeContainer,
                     experimentalModeEnabled = experimentalModeEnabled,
                     args = intent.getStringExtra("servoargs"),
-                    initialUrl = if (Intent.ACTION_VIEW == intent.action) intent.data.toString() else null,
+                    initialUrl = if (Intent.ACTION_VIEW == intent.action) {
+                        intent.data.toString()
+                    } else {
+                        "https://www.google.com/"
+                    },
                     logStr = intent.getStringExtra("servolog"),
                     client = this,
                     navigator = navigator,
@@ -306,82 +322,7 @@ class MainActivity : ComponentActivity(), Servo.Client {
                 }
             }
 
-            if (showContainers) {
-                ModalBottomSheet(onDismissRequest = { showContainers = false }) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text(
-                            stringResource(R.string.containers),
-                            style = androidx.compose.material3.MaterialTheme.typography.titleLarge,
-                        )
-                        Text(
-                            stringResource(R.string.container_note),
-                            style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
-                        )
-                        Spacer(Modifier.height(12.dp))
-                        LazyColumn(modifier = Modifier.fillMaxWidth().height(320.dp)) {
-                            items(containerManager.containers, key = { it.id }) { container ->
-                                ListItem(
-                                    headlineContent = { Text(container.name) },
-                                    leadingContent = {
-                                        RadioButton(
-                                            selected = container.id == activeContainer,
-                                            onClick = { switchContainer(container.id) },
-                                        )
-                                    },
-                                    trailingContent = {
-                                        if (containerManager.containers.size > 1) {
-                                            IconButton(onClick = { deleteContainer(container.id) }) {
-                                                Icon(
-                                                    painterResource(R.drawable.delete),
-                                                    stringResource(R.string.cancel),
-                                                )
-                                            }
-                                        }
-                                    },
-                                )
-                            }
-                        }
-                        Button(
-                            onClick = {
-                                showContainers = false
-                                showCreateContainer = true
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Text(stringResource(R.string.new_container))
-                        }
-                    }
-                }
-            }
 
-            if (showCreateContainer) {
-                AlertDialog(
-                    onDismissRequest = { showCreateContainer = false },
-                    title = { Text(stringResource(R.string.new_container)) },
-                    text = {
-                        TextField(
-                            value = newContainerName,
-                            onValueChange = { newContainerName = it },
-                            singleLine = true,
-                            label = { Text(stringResource(R.string.container_name)) },
-                        )
-                    },
-                    confirmButton = {
-                        TextButton(onClick = {
-                            if (newContainerName.isNotBlank()) {
-                                switchContainer(containerManager.create(newContainerName.trim()).id)
-                                newContainerName = ""
-                            }
-                            showCreateContainer = false
-                        }) { Text(stringResource(R.string.create)) }
-                    },
-                    dismissButton = {
-                        TextButton(onClick = { showCreateContainer = false }) {
-                            Text(stringResource(R.string.cancel))
-                        }
-                    },
-                )
-            }
         }
 
         val sdcard = getExternalFilesDir("")
@@ -430,6 +371,7 @@ class MainActivity : ComponentActivity(), Servo.Client {
 
     companion object {
         private const val TAG = "MainActivity"
+        const val EXTRA_CONTAINER_ID = "org.servo.servoshell.container_id"
     }
 }
 
