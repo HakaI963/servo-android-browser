@@ -418,13 +418,13 @@ internal constructor(
     }
 
     private class Callbacks(
-        private var client: Client,
+        var client: Client,
         private val jni: JNIServo,
         private val scope: CoroutineScope,
         private val glDispatcher: CoroutineDispatcher,
-        private var navigator: ServoNavigator,
-        private var onImeShow: () -> Unit,
-        private var onImeHide: () -> Unit,
+        var navigator: ServoNavigator,
+        var onImeShow: () -> Unit,
+        var onImeHide: () -> Unit,
     ) : JNIServo.Callbacks, Client {
         var suspended: Boolean = false
 
