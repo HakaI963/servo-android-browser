@@ -4,7 +4,7 @@
 
 #![allow(non_snake_case)]
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::os::raw::{c_char, c_int, c_void};
 use std::path::PathBuf;
 use std::ptr::NonNull;
@@ -35,7 +35,6 @@ use crate::window::ServoShellWindowId;
 
 thread_local! {
     pub static APP: RefCell<Option<Rc<App>>> = const { RefCell::new(None) };
-    static CONTAINER_SLOT: Cell<usize> = const { Cell::new(0) };
 }
 
 /// One callback slot per browser container. Each container owns a GL thread that is bound to a
@@ -43,9 +42,13 @@ thread_local! {
 static CALLBACK_OBJECTS: [OnceLock<Global<JObject<'static>>>;
     crate::prefs::MAX_CONTAINERS] = [const { OnceLock::new() }; crate::prefs::MAX_CONTAINERS];
 
-fn callback_ref() -> &'static JObject<'static> {
-    let slot = CONTAINER_SLOT.with(|slot| slot.get());
-    CALLBACK_OBJECTS[slot].get().expect("Servo init failed").as_ref()
+/// Callbacks are invoked from Servo's own threads, not only the container's GL thread, so the
+/// slot must travel with the callback object instead of living in thread-local storage.
+fn callback_for(slot: usize) -> &'static JObject<'static> {
+    CALLBACK_OBJECTS[slot.min(crate::prefs::MAX_CONTAINERS - 1)]
+        .get()
+        .expect("Servo init failed")
+        .as_ref()
 }
 
 struct HostCallbacks {
@@ -98,7 +101,6 @@ pub extern "C" fn Java_org_servo_servoview_JNIServo_init<'local>(
             .try_to_string(env)?
             .unwrap_or_else(|| "default".to_owned());
         let slot = (slot as usize).min(crate::prefs::MAX_CONTAINERS - 1);
-        CONTAINER_SLOT.with(|s| s.set(slot));
         crate::prefs::set_container_slot(slot);
 
         let mut args: Vec<String> = args
@@ -173,9 +175,9 @@ pub extern "C" fn Java_org_servo_servoview_JNIServo_init<'local>(
         let _ = CALLBACK_OBJECTS[slot].set(callbacks);
 
         let jvm = env.get_java_vm()?;
-        let event_loop_waker = Box::new(WakeupCallback::new(jvm.clone()));
+        let event_loop_waker = Box::new(WakeupCallback::new(jvm.clone(), slot));
 
-        let host = Rc::new(HostCallbacks::new(jvm));
+        let host = Rc::new(HostCallbacks::new(jvm, slot));
 
         crate::init_crypto();
 
@@ -562,33 +564,39 @@ pub extern "C" fn Java_org_servo_servoview_JNIServo_resumePainting<'local>(
 
 pub struct WakeupCallback {
     jvm: Arc<JavaVM>,
+    slot: usize,
 }
 
 impl WakeupCallback {
-    fn new(jvm: JavaVM) -> WakeupCallback {
-        WakeupCallback { jvm: Arc::new(jvm) }
+    fn new(jvm: JavaVM, slot: usize) -> WakeupCallback {
+        WakeupCallback { jvm: Arc::new(jvm), slot }
     }
 }
 
 impl EventLoopWaker for WakeupCallback {
     fn clone_box(&self) -> Box<dyn EventLoopWaker> {
         let jvm = self.jvm.clone();
-        Box::new(WakeupCallback { jvm })
+        Box::new(WakeupCallback { jvm, slot: self.slot })
     }
     fn wake(&self) {
         debug!("wakeup");
         self.jvm
             .attach_current_thread(|env| -> Result<(), Error> {
-                env.call_method(callback_ref(), jni_str!("wakeup"), jni_sig!("()V"), &[])?;
+                env.call_method(callback_for(self.slot), jni_str!("wakeup"), jni_sig!("()V"), &[])?;
                 Ok(())
             })
             .unwrap();
     }
 }
 
+pub struct HostCallbacks {
+    jvm: JavaVM,
+    slot: usize,
+}
+
 impl HostCallbacks {
-    fn new(jvm: JavaVM) -> HostCallbacks {
-        HostCallbacks { jvm }
+    fn new(jvm: JavaVM, slot: usize) -> HostCallbacks {
+        HostCallbacks { jvm, slot }
     }
 }
 
@@ -600,7 +608,7 @@ impl HostTrait for HostCallbacks {
                     return Ok(());
                 };
                 env.call_method(
-                    callback_ref(),
+                    callback_for(self.slot),
                     jni_str!("onAlert"),
                     jni_sig!("(Ljava/lang/String;)V"),
                     &[(&string).into()],
@@ -616,7 +624,7 @@ impl HostTrait for HostCallbacks {
             .attach_current_thread(|env| match load_status {
                 LoadStatus::Started => env
                     .call_method(
-                        callback_ref(),
+                        callback_for(self.slot),
                         jni_str!("onLoadStarted"),
                         jni_sig!("()V"),
                         &[],
@@ -625,7 +633,7 @@ impl HostTrait for HostCallbacks {
                 LoadStatus::HeadParsed => Ok(()),
                 LoadStatus::Complete | LoadStatus::Stopped => env
                     .call_method(
-                        callback_ref(),
+                        callback_for(self.slot),
                         jni_str!("onLoadEnded"),
                         jni_sig!("()V"),
                         &[],
@@ -648,7 +656,7 @@ impl HostTrait for HostCallbacks {
                     return Ok(());
                 };
                 env.call_method(
-                    callback_ref(),
+                    callback_for(self.slot),
                     jni_str!("onTitleChanged"),
                     jni_sig!("(Ljava/lang/String;)V"),
                     &[(&title_string).into()],
@@ -667,7 +675,7 @@ impl HostTrait for HostCallbacks {
                 };
 
                 env.call_method(
-                    callback_ref(),
+                    callback_for(self.slot),
                     jni_str!("onUrlChanged"),
                     jni_sig!("(Ljava/lang/String;)V"),
                     &[(&url_string).into()],
@@ -684,7 +692,7 @@ impl HostTrait for HostCallbacks {
                 let can_go_back = JValue::Bool(can_go_back as jboolean);
                 let can_go_forward = JValue::Bool(can_go_forward as jboolean);
                 env.call_method(
-                    callback_ref(),
+                    callback_for(self.slot),
                     jni_str!("onHistoryChanged"),
                     jni_sig!("(ZZ)V"),
                     &[can_go_back, can_go_forward],
@@ -697,7 +705,7 @@ impl HostTrait for HostCallbacks {
     fn on_ime_show(&self, _: InputMethodControl) {
         self.jvm
             .attach_current_thread(|env| -> Result<(), Error> {
-                env.call_method(callback_ref(), jni_str!("onImeShow"), jni_sig!("()V"), &[])?;
+                env.call_method(callback_for(self.slot), jni_str!("onImeShow"), jni_sig!("()V"), &[])?;
                 Ok(())
             })
             .unwrap();
@@ -706,7 +714,7 @@ impl HostTrait for HostCallbacks {
     fn on_ime_hide(&self) {
         self.jvm
             .attach_current_thread(|env| -> Result<(), Error> {
-                env.call_method(callback_ref(), jni_str!("onImeHide"), jni_sig!("()V"), &[])?;
+                env.call_method(callback_for(self.slot), jni_str!("onImeHide"), jni_sig!("()V"), &[])?;
                 Ok(())
             })
             .unwrap();
