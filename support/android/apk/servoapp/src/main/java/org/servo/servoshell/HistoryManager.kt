@@ -8,8 +8,11 @@ import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 
 /** Keeps a history of visited websites in an app-scoped JSON file. */
-class HistoryManager(context: Context) {
-    private val historyFile = File(context.filesDir, HISTORY_FILE)
+class HistoryManager(context: Context, containerId: String? = null) {
+    private val historyFile = File(
+        context.filesDir,
+        if (containerId == null) HISTORY_FILE else "containers/$containerId/$HISTORY_FILE",
+    )
 
     /** Add a new history entry. Only adds if the URL is different from the most recent entry. */
     fun addEntry(url: String, title: String?) {
