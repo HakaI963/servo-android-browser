@@ -51,10 +51,6 @@ fn callback_for(slot: usize) -> &'static JObject<'static> {
         .as_ref()
 }
 
-struct HostCallbacks {
-    jvm: JavaVM,
-}
-
 unsafe extern "C" {
     fn ANativeWindow_fromSurface(env: *mut jni::sys::JNIEnv, surface: jobject) -> *mut c_void;
 }
