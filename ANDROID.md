@@ -7,46 +7,48 @@ The Android browser is the upstream application, not a reimplementation:
 - Kotlin wrapper: `support/android/apk/servoview/`
 - Browser app: `support/android/apk/servoapp/`
 
-## Changes applied in this fork
+## App shell
 
-A small design pass was applied to the upstream app, using the `ui-ux-pro-max` and `unslop`
-design directions while keeping the real app structure and engine intact:
+Launching the app opens **ContainerPickerActivity**, a container manager showing every browser
+container with an option to create more. Tapping a container opens it in `MainActivity`; the grid
+button in the browser returns to the manager. Containers are the app's top-level concept — the
+browser is opened inside a chosen container, not on launch.
 
-- `servoapp/src/main/res/values/styles.xml` — graphite dark system chrome (`#0B0E11`)
-- `servoapp/src/main/java/org/servo/servoshell/MainActivity.kt` — Material 3 dark color scheme
-  with a restrained jade accent (`#5FC79A`); the rendered page remains the only bright element
-- `servoapp/src/main/res/values/strings.xml` — plain, sentence-case UI copy
+New containers open on `https://www.google.com/` and the omnibox searches with Google.
 
 ## Containers and keep-alive
 
-The browser can host many independent browsing containers. Each container has:
+Each container has:
 
 - its own Servo engine instance and thread-bound slot in the native library
 - its own config directory under `filesDir/servo/<container-id>` (site data, cookies, prefs)
 - its own browsing history (`filesDir/containers/<container-id>/history.json`)
-- its own settings and its own navigation state, so accounts never mix
+- its own settings and navigation state, so accounts never mix
 
-Create, switch and delete containers from the grid button in the top bar. Up to 256 containers can
-be alive at once; deleted containers release their slot for reuse.
+Up to 256 containers can be alive at once; deleted containers release their slot for reuse.
+Only one container paints at a time; switching pauses the previous engine before the new one
+attaches to the surface.
 
 Sessions are owned by `ContainerRegistry` at process level, not by an Activity or Composable.
-Closing the screen, rotating, or backgrounding the app detaches the surface but keeps the page
-loaded. Returning rebinds the callbacks and reattaches the surface without reloading. Sessions are
-destroyed only when the user taps **Terminate all sessions** in Settings (or Android force-stops
-the app).
+Closing the screen, rotating, or backgrounding keeps the page loaded. Returning rebinds callbacks
+and reattaches the surface without reloading. Sessions are destroyed only via **Terminate all
+sessions** in Settings (or an Android force-stop).
 
-Native changes that make this possible:
+## Native changes
 
-- `ports/servoshell/egl/android/mod.rs`: `CALLBACK_OBJECTS` and the per-container config directory
-- `ports/servoshell/prefs.rs`: slot-indexed `DEFAULT_CONFIG_DIRS`
-- `JNIServo.init` accepts a container id and slot
+- `ports/servoshell/lib.rs` — global init (`init_crypto`, `init_tracing`) is idempotent, so
+  creating a second container no longer crashes the process.
+- `ports/servoshell/egl/android/mod.rs` — `CALLBACK_OBJECTS` and callbacks are slot-indexed;
+  callbacks carry their slot because `wakeup()` runs on arbitrary Servo threads.
+- `ports/servoshell/prefs.rs` — slot-indexed `DEFAULT_CONFIG_DIRS`.
+- `JNIServo.init` accepts a container id and slot.
 
 ## Build
 
 The upstream workflow builds the engine and app for all three ABIs:
 
 ```bash
-# In GitHub Actions: run the "Android" workflow (workflow_dispatch), profile checked-release.
+# GitHub Actions: run the "Android" workflow (workflow_dispatch), profile checked-release.
 # Locally: cd support/android/apk && ./gradlew :servoapp:assembleArm64Release
 ```
 
